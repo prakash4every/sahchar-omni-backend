@@ -9,7 +9,6 @@ import sqlite3 from 'sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import SQLiteStoreFactory from 'connect-sqlite3';
 
 // Load environment variables
 dotenv.config();
@@ -25,9 +24,8 @@ const __dirname = path.dirname(__filename);
 // Use /tmp for writable storage on Render
 const DATA_DIR = '/tmp/data';
 const UPLOAD_DIR = '/tmp/uploads';
-const SESSION_DB_DIR = '/tmp/sessions';
 
-[DATA_DIR, UPLOAD_DIR, SESSION_DB_DIR].forEach(dir => {
+[DATA_DIR, UPLOAD_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     console.log(`Created directory: ${dir}`);
@@ -39,14 +37,8 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// ==================== SESSION CONFIGURATION ====================
-const SQLiteStore = SQLiteStoreFactory(session);
-
+// ==================== SESSION CONFIGURATION (MemoryStore) ====================
 app.use(session({
-  store: new SQLiteStore({
-    db: 'sessions.db',
-    dir: SESSION_DB_DIR
-  }),
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-in-production',
   resave: false,
   saveUninitialized: true,
