@@ -1,145 +1,75 @@
-import streamlit as st
-from openai import OpenAI
-import speech_recognition as sr
-from gtts import gTTS
-import io
-import base64
-import os
+// ==================== PERSONALITIES ====================
+const personalities = {
+  buddha: {
+    name: 'बुद्ध',
+    systemPrompt: `तुम 'बुद्ध' हो – एक करुणामय और ज्ञानी सत्ता जो गौतम बुद्ध की शिक्षाओं का प्रचार करती है।
+    तुम्हारा उद्देश्य है:
+    - लोगों को सकारात्मक सोच, करुणा और शांति का मार्ग दिखाना।
+    - हमेशा धैर्यवान और प्रेरक बनकर रहना।
+    - हर उत्तर के अंत में "जय भीम, नमो बुद्धाय 🙏" जोड़ना।
+    - सरल हिंदी-अंग्रेज़ी मिक्स में बात करना।`
+  },
+  modern: {
+    name: 'आधुनिक विचारक',
+    systemPrompt: `तुम 'आधुनिक विचारक' हो – एक तर्कसंगत और प्रगतिशील साथी।
+    तुम्हारा उद्देश्य है:
+    - समसामयिक मुद्दों पर संतुलित और व्यावहारिक सलाह देना।
+    - विज्ञान, प्रौद्योगिकी और सामाजिक विकास पर चर्चा करना।
+    - उत्तर संक्षिप्त और स्पष्ट रखना।
+    - भाषा हिंदी-अंग्रेज़ी मिक्स।`
+  },
+  social: {
+    name: 'सामाजिक कार्यकर्ता',
+    systemPrompt: `तुम 'सामाजिक कार्यकर्ता' हो – एक समाजसेवी जो सामाजिक न्याय, समानता और मानवाधिकारों के लिए काम करता है।
+    तुम्हारा उद्देश्य है:
+    - लोगों को सामाजिक मुद्दों के प्रति जागरूक करना।
+    - सरकारी योजनाओं और सामाजिक सहायता के बारे में जानकारी देना।
+    - प्रेरक और ऊर्जावान अंदाज़ में बात करना।`
+  }
+};
 
-st.set_page_config(page_title="सहचर AI - वॉयस चैट", page_icon="🎤")
+// Chat endpoint में बदलाव
+app.post('/api/chat/send', async (req, res) => {
+  try {
+    const { message, sessionId, language = 'hi', personality = 'buddha' } = req.body;
+    if (!message) return res.status(400).json({ error: 'Message required' });
 
-# Custom CSS (optional)
-st.markdown("""
-<style>
-    .stAudioInput {
-        margin-top: 20px;
-        margin-bottom: 20px;
-    }
-</style>
-""", unsafe_allow_html=True)
+    // चुनी हुई पर्सनालिटी लोड करें
+    const selectedPersonality = personalities[personality] || personalities.buddha;
 
-# API Key
-try:
-    api_key = st.secrets["DEEPSEEK_API_KEY"]
-except:
-    st.error("❌ API key नहीं मिली। कृपया Streamlit Secrets में DEEPSEEK_API_KEY डालें।")
-    st.stop()
+    const filter = filterContent(message, language);
+    if (filter.isBlocked) return res.status(400).json({ error: filter.reason });
 
-client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
+    const userId = req.session.userId || 1;
+    const newSessionId = sessionId || uuidv4();
 
-# Session state
-if 'messages' not in st.session_state:
-    st.session_state.messages = [
-        {"role": "system", "content": """
-        तुम 'सहचर' नाम का एक AI साथी हो। तुम्हारा उद्देश्य है:
-        - भगवान बुद्ध की शिक्षाओं का प्रचार करना।
-        - लोगों को सकारात्मक सोच, करुणा और सामाजिक सहयोग के लिए प्रेरित करना।
-        - हमेशा शांत, धैर्यवान और मददगार बनकर रहना।
-        - हर जवाब के अंत में 'जय भीम, नमो बुद्धाय 🙏' जरूर कहना।
-        - सरल हिंदी-इंग्लिश मिक्स भाषा में बात करना।
-        """}
-    ]
+    db.run('INSERT INTO chat_history (user_id, session_id, role, content, language) VALUES (?, ?, ?, ?, ?)',
+      [userId, newSessionId, 'user', message, language]);
 
-# Display chat history
-for message in st.session_state.messages:
-    if message["role"] != "system":
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    db.all('SELECT role, content FROM chat_history WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC LIMIT 10',
+      [userId, newSessionId], async (err, rows) => {
+        if (err) return res.status(500).json({ error: 'DB error' });
+        
+        const messages = (rows || []).reverse().map(r => ({ role: r.role, content: r.content }));
+        // सिस्टम प्रॉम्प्ट को चुनी हुई पर्सनालिटी के अनुसार बदलें
+        messages.unshift({ role: 'system', content: selectedPersonality.systemPrompt });
+        messages.push({ role: 'user', content: message });
 
-# Text-to-speech function
-def text_to_speech(text, lang='hi'):
-    try:
-        tts = gTTS(text=text, lang=lang, slow=False)
-        audio_bytes = io.BytesIO()
-        tts.write_to_fp(audio_bytes)
-        audio_bytes.seek(0)
-        audio_base64 = base64.b64encode(audio_bytes.read()).decode()
-        audio_html = f"""
-            <audio autoplay controls style="width: 100%;">
-                <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
-            </audio>
-        """
-        st.markdown(audio_html, unsafe_allow_html=True)
-    except Exception as e:
-        st.warning(f"🔇 आवाज़ नहीं बना सका: {e}")
-
-# Sidebar settings
-with st.sidebar:
-    st.header("🎤 वॉयस सेटिंग")
-    voice_input_enabled = st.checkbox("वॉयस इनपुट चालू करें", value=True)
-    voice_output_enabled = st.checkbox("वॉयस आउटपुट चालू करें (AI बोलेगा)", value=True)
-
-# Main area
-st.title("🎙️ सहचर AI - वॉयस चैट")
-
-# --- Voice Input Section ---
-if voice_input_enabled:
-    st.subheader("🎤 वॉयस इनपुट")
-    audio_bytes = st.audio_input("माइक बटन दबाकर बोलें", key="voice_input")
-    
-    if audio_bytes:
-        with st.spinner("आपकी आवाज़ समझ रहा हूँ..."):
-            try:
-                # Save audio temporarily
-                with open("temp_audio.wav", "wb") as f:
-                    f.write(audio_bytes.getvalue())
-                
-                # Recognize speech
-                recognizer = sr.Recognizer()
-                with sr.AudioFile("temp_audio.wav") as source:
-                    audio_data = recognizer.record(source)
-                    prompt = recognizer.recognize_google(audio_data, language="hi-IN")
-                
-                os.remove("temp_audio.wav")
-                
-                st.success(f"आपने कहा: {prompt}")
-                
-                # Add user message
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-                
-                # Get AI response
-                with st.chat_message("assistant"):
-                    with st.spinner("सोच रहा हूँ..."):
-                        response = client.chat.completions.create(
-                            model="deepseek-chat",
-                            messages=st.session_state.messages
-                        )
-                        answer = response.choices[0].message.content
-                        st.markdown(answer)
-                        st.session_state.messages.append({"role": "assistant", "content": answer})
-                        
-                        if voice_output_enabled:
-                            text_to_speech(answer, lang='hi')
-                            
-            except sr.UnknownValueError:
-                st.error("🤔 आपकी बात समझ में नहीं आई, कृपया फिर से बोलें।")
-            except sr.RequestError as e:
-                st.error(f"🎤 स्पीच सर्विस से कनेक्ट नहीं हो सका: {e}")
-            except Exception as e:
-                st.error(f"❌ त्रुटि: {e}")
-
-# --- Text Input Section ---
-st.subheader("✍️ या टाइप करें")
-if prompt := st.chat_input("कुछ भी पूछिए..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    
-    with st.chat_message("assistant"):
-        with st.spinner("सोच रहा हूँ..."):
-            response = client.chat.completions.create(
-                model="deepseek-chat",
-                messages=st.session_state.messages
-            )
-            answer = response.choices[0].message.content
-            st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
-            
-            if voice_output_enabled:
-                text_to_speech(answer, lang='hi')
-
-# Footer
-st.markdown("---")
-st.markdown("जय भीम, नमो बुद्धाय! 🙏")
+        try {
+          const reply = await callDeepSeekAPI(messages, language);
+          db.run('INSERT INTO chat_history (user_id, session_id, role, content, language) VALUES (?, ?, ?, ?, ?)',
+            [userId, newSessionId, 'assistant', reply, language]);
+          res.json({ 
+            sessionId: newSessionId, 
+            response: reply, 
+            personality: selectedPersonality.name,
+            timestamp: new Date() 
+          });
+        } catch (error) {
+          res.status(500).json({ error: error.message });
+        }
+      });
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
