@@ -1,3 +1,5 @@
+import express from 'express';
+const app = express ();
 // ==================== PERSONALITIES ====================
 const personalities = {
   buddha: {
